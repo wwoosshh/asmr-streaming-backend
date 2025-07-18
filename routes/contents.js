@@ -1,8 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
-const fs = require('fs').promises;
-const path = require('path');
 
 // 모든 컨텐츠 조회
 router.get('/', async (req, res) => {
@@ -27,6 +25,11 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const contentId = req.params.id;
+    
+    // 파라미터 검증
+    if (!contentId || isNaN(contentId)) {
+      return res.status(400).json({ error: '유효하지 않은 컨텐츠 ID입니다.' });
+    }
     
     const [rows] = await pool.execute(`
       SELECT * FROM contents WHERE id = ?
@@ -57,7 +60,14 @@ router.get('/:id', async (req, res) => {
 // 컨텐츠 검색
 router.get('/search/:query', async (req, res) => {
   try {
-    const query = `%${req.params.query}%`;
+    const searchQuery = req.params.query;
+    
+    // 파라미터 검증
+    if (!searchQuery || searchQuery.trim().length === 0) {
+      return res.status(400).json({ error: '검색어를 입력해주세요.' });
+    }
+    
+    const query = `%${searchQuery}%`;
     
     const [rows] = await pool.execute(`
       SELECT 
