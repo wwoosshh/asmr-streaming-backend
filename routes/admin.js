@@ -103,7 +103,7 @@ const processTags = async (tagIds, contentId, connection) => {
 
 // 파일 이동 및 구조 생성
 const organizeFiles = async (contentId, customId, files) => {
-  const finalId = customId || contentId;
+  const finalId = customId && customId.trim() ? customId.trim() : contentId;
   const contentDir = path.join(__dirname, `../../audio-files/content-${finalId}`);
   
   if (!fs.existsSync(contentDir)) {
@@ -133,9 +133,128 @@ const organizeFiles = async (contentId, customId, files) => {
     contentDir,
     audioFiles: audioFiles.length,
     imageFiles: imageFiles.length,
-    totalFiles: files.length
+    totalFiles: files.length,
+    usedCustomId: !!customId
   };
 };
+router.get('/check-content-id/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const contentId = req.params.id;
+    
+    // ID 유효성 검사
+    const parsedId = parseInt(contentId);
+    if (isNaN(parsedId) || parsedId <= 0) {
+      return res.status(400).json({
+        available: false,
+        error: 'ID는 1 이상의 숫자여야 합니다.',
+        suggestion: '유효한 숫자를 입력해주세요.'
+      });
+    }
+    
+    console.log('[ID 확인] 확인할 ID:', parsedId);
+    
+    // 중복 확인
+    const [existing] = await pool.execute(
+      'SELECT id, title FROM contents WHERE id = ?',
+      [parsedId]
+    );
+    
+    const isAvailable = existing.length === 0;
+    
+    const response = {
+      id: parsedId,
+      available: isAvailable,
+      message: isAvailable ? 
+        `ID ${parsedId}는 사용 가능합니다.` : 
+        `ID ${parsedId}는 이미 사용 중입니다.`
+    };
+    
+    if (!isAvailable && existing[0]) {
+      response.existing_content = {
+        title: existing[0].title,
+        suggestion: '다른 ID를 선택해주세요.'
+      };
+    }
+    
+    console.log('[ID 확인] 결과:', response);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('ID 확인 오류:', error);
+    res.status(500).json({
+      available: false,
+      error: 'ID 확인 중 오류가 발생했습니다.',
+      details: error.message
+    });
+  }
+});
+
+router.get('/suggest-content-id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    console.log('[ID 제안] 시작');
+    
+    // 가장 큰 ID 조회
+    const [maxIdResult] = await pool.execute(
+      'SELECT MAX(id) as max_id FROM contents'
+    );
+    
+    const maxId = maxIdResult[0].max_id || 0;
+    const suggestedId = maxId + 1;
+    
+    // 제안된 ID가 사용 가능한지 확인 (혹시 모를 gap 확인)
+    const [checkSuggested] = await pool.execute(
+      'SELECT id FROM contents WHERE id = ?',
+      [suggestedId]
+    );
+    
+    let finalSuggestion = suggestedId;
+    
+    // 만약 제안된 ID도 사용 중이라면 다음 사용 가능한 ID 찾기
+    if (checkSuggested.length > 0) {
+      let nextId = suggestedId + 1;
+      let found = false;
+      
+      // 최대 100개까지 확인
+      for (let i = 0; i < 100; i++) {
+        const [checkNext] = await pool.execute(
+          'SELECT id FROM contents WHERE id = ?',
+          [nextId]
+        );
+        
+        if (checkNext.length === 0) {
+          finalSuggestion = nextId;
+          found = true;
+          break;
+        }
+        nextId++;
+      }
+      
+      if (!found) {
+        return res.status(500).json({
+          error: '사용 가능한 ID를 찾을 수 없습니다.',
+          suggestion: '수동으로 ID를 입력해주세요.'
+        });
+      }
+    }
+    
+    const response = {
+      suggested_id: finalSuggestion,
+      max_existing_id: maxId,
+      message: `ID ${finalSuggestion}를 추천합니다.`,
+      is_next_sequential: finalSuggestion === (maxId + 1)
+    };
+    
+    console.log('[ID 제안] 결과:', response);
+    res.json(response);
+    
+  } catch (error) {
+    console.error('ID 제안 오류:', error);
+    res.status(500).json({
+      error: 'ID 제안 중 오류가 발생했습니다.',
+      details: error.message
+    });
+  }
+});
 
 // 컨텐츠 생성
 router.post('/contents', authenticateToken, requireAdmin, upload.array('files', 20), async (req, res) => {
@@ -143,6 +262,7 @@ router.post('/contents', authenticateToken, requireAdmin, upload.array('files', 
   
   try {
     const {
+      customId,        // 추가: 사용자 지정 ID
       title,
       description,
       contentRating,
@@ -154,6 +274,7 @@ router.post('/contents', authenticateToken, requireAdmin, upload.array('files', 
     } = req.body;
     
     console.log('[컨텐츠 생성] 요청 데이터:', {
+      customId,        // 추가
       title,
       description,
       contentRating,
@@ -185,26 +306,75 @@ router.post('/contents', authenticateToken, requireAdmin, upload.array('files', 
     await connection.beginTransaction();
     
     try {
-      // 컨텐츠 생성
-      const [result] = await connection.execute(
-        `INSERT INTO contents 
-         (title, description, content_rating, content_type, duration_minutes, 
-          total_files, audio_quality, featured, view_count, like_count, status) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'active')`,
-        [
-          title,
-          description,
-          contentRating || 'All',
-          contentType || 'Audio',
-          parseInt(durationMinutes) || 0,
-          audioFiles.length,
-          audioQuality || 'Standard',
-          featured === 'true' || featured === true || false
-        ]
-      );
+      let finalContentId;
       
-      const contentId = result.insertId;
-      console.log('[컨텐츠 생성] 컨텐츠 ID:', contentId);
+      // 사용자 지정 ID 처리
+      if (customId && customId.trim()) {
+        const parsedCustomId = parseInt(customId.trim());
+        
+        // ID 유효성 검사
+        if (isNaN(parsedCustomId) || parsedCustomId <= 0) {
+          await connection.rollback();
+          return res.status(400).json({ error: '컨텐츠 ID는 1 이상의 숫자여야 합니다.' });
+        }
+        
+        // 중복 ID 확인
+        const [existingContent] = await connection.execute(
+          'SELECT id FROM contents WHERE id = ?',
+          [parsedCustomId]
+        );
+        
+        if (existingContent.length > 0) {
+          await connection.rollback();
+          return res.status(400).json({ 
+            error: `ID ${parsedCustomId}는 이미 사용 중입니다. 다른 ID를 선택해주세요.` 
+          });
+        }
+        
+        // 사용자 지정 ID로 컨텐츠 생성
+        const [result] = await connection.execute(
+          `INSERT INTO contents 
+           (id, title, description, content_rating, content_type, duration_minutes, 
+            total_files, audio_quality, featured, view_count, like_count, status) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'active')`,
+          [
+            parsedCustomId,
+            title,
+            description,
+            contentRating || 'All',
+            contentType || 'Audio',
+            parseInt(durationMinutes) || 0,
+            audioFiles.length,
+            audioQuality || 'Standard',
+            featured === 'true' || featured === true || false
+          ]
+        );
+        
+        finalContentId = parsedCustomId;
+        console.log('[컨텐츠 생성] 사용자 지정 ID 사용:', finalContentId);
+        
+      } else {
+        // 자동 생성 ID 사용 (기존 방식)
+        const [result] = await connection.execute(
+          `INSERT INTO contents 
+           (title, description, content_rating, content_type, duration_minutes, 
+            total_files, audio_quality, featured, view_count, like_count, status) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'active')`,
+          [
+            title,
+            description,
+            contentRating || 'All',
+            contentType || 'Audio',
+            parseInt(durationMinutes) || 0,
+            audioFiles.length,
+            audioQuality || 'Standard',
+            featured === 'true' || featured === true || false
+          ]
+        );
+        
+        finalContentId = result.insertId;
+        console.log('[컨텐츠 생성] 자동 생성 ID 사용:', finalContentId);
+      }
       
       // 태그 처리
       if (tagIds) {
@@ -214,22 +384,23 @@ router.post('/contents', authenticateToken, requireAdmin, upload.array('files', 
         console.log('[태그 처리] 태그 IDs:', parsedTagIds);
         
         if (parsedTagIds.length > 0) {
-          const processedTags = await processTags(parsedTagIds, contentId, connection);
+          const processedTags = await processTags(parsedTagIds, finalContentId, connection);
           console.log('[태그 처리] 처리된 태그 수:', processedTags.length);
         }
       }
       
       // 파일 정리
-      const fileInfo = await organizeFiles(contentId, null, req.files);
+      const fileInfo = await organizeFiles(finalContentId, customId, req.files);
       console.log('[파일 정리] 완료:', fileInfo);
       
       await connection.commit();
       
-      console.log(`[컨텐츠 생성 완료] ID: ${contentId}, 디렉토리: ${fileInfo.contentDir}`);
+      console.log(`[컨텐츠 생성 완료] ID: ${finalContentId}, 디렉토리: ${fileInfo.contentDir}`);
       
       res.status(201).json({
         message: '컨텐츠가 성공적으로 생성되었습니다.',
-        contentId: contentId,
+        contentId: finalContentId,
+        isCustomId: !!customId,
         fileInfo: fileInfo
       });
       
@@ -250,10 +421,18 @@ router.post('/contents', authenticateToken, requireAdmin, upload.array('files', 
       });
     }
     
-    res.status(500).json({ 
-      error: '컨텐츠 생성 중 오류가 발생했습니다.',
-      details: error.message 
-    });
+    // 사용자 지정 ID 관련 특별 처리
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(400).json({ 
+        error: '지정한 ID가 이미 사용 중입니다. 다른 ID를 선택해주세요.',
+        details: error.message 
+      });
+    } else {
+      res.status(500).json({ 
+        error: '컨텐츠 생성 중 오류가 발생했습니다.',
+        details: error.message 
+      });
+    }
   } finally {
     if (connection) {
       connection.release();

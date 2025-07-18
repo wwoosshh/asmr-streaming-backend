@@ -185,12 +185,15 @@ router.get('/me', authenticateToken, async (req, res) => {
 });
 
 // 관리자 전용: 모든 사용자 조회 (수정됨)
+// 🖥️ 백엔드: backend/routes/auth.js에서 '/users' 라우트를 이 간단한 버전으로 교체하세요
+
+// 관리자 전용: 모든 사용자 조회 (간단한 버전)
 router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
     console.log(`[사용자 목록 조회] 요청자: ${req.user.username} (${req.user.role})`);
     
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 20));
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
     
     console.log(`[사용자 목록 조회] page: ${page}, limit: ${limit}, offset: ${offset}`);
@@ -201,19 +204,23 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
     
     console.log(`[사용자 목록 조회] 전체 사용자 수: ${total}`);
     
-    // 사용자 목록 조회
-    const [users] = await pool.execute(
-      `SELECT id, username, email, role, created_at 
-       FROM users 
-       ORDER BY created_at DESC 
-       LIMIT ? OFFSET ?`,
-      [limit, offset]
-    );
+    // 사용자 목록 조회 (파라미터를 직접 문자열로 삽입)
+    const userQuery = `
+      SELECT id, username, email, role, 
+             COALESCE(created_at, NOW()) as created_at 
+      FROM users 
+      ORDER BY id DESC 
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+    
+    console.log('[사용자 목록 조회] 실행할 쿼리:', userQuery);
+    
+    const [users] = await pool.execute(userQuery);
     
     console.log(`[사용자 목록 조회] 조회된 사용자 수: ${users.length}`);
     
     const response = {
-      users,
+      users: users || [],
       pagination: {
         page,
         limit,
@@ -223,11 +230,14 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
     };
     
     res.json(response);
+    
   } catch (error) {
     console.error('사용자 목록 조회 오류:', error);
-    res.status(500).json({ 
+    
+    res.status(500).json({
       error: '사용자 목록을 조회하는 중 오류가 발생했습니다.',
-      details: error.message 
+      details: error.message,
+      solution: '/api/debug/users-debug 엔드포인트로 상세 진단을 해보세요.'
     });
   }
 });

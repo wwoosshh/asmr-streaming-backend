@@ -17,6 +17,9 @@ const getFirstLetter = (name) => {
 };
 
 // 모든 태그 조회 (알파벳별로 정렬)
+// routes/tags.js에서 모든 태그 조회 부분을 다음과 같이 수정하세요:
+
+// 모든 태그 조회 (알파벳별로 정렬) - 수정된 버전
 router.get('/', async (req, res) => {
   try {
     console.log('[태그 목록] 조회 시작');
@@ -25,7 +28,8 @@ router.get('/', async (req, res) => {
     
     let query = `
       SELECT 
-        t.id, t.name, t.first_letter, t.usage_count,
+        t.id, t.name, t.first_letter, 
+        COALESCE(t.usage_count, 0) as usage_count,
         COUNT(ct.content_id) as current_usage
       FROM tags t
       LEFT JOIN content_tags ct ON t.id = ct.tag_id
@@ -35,15 +39,15 @@ router.get('/', async (req, res) => {
     const conditions = [];
     
     // 알파벳 필터
-    if (letter) {
+    if (letter && letter !== 'all') {
       conditions.push('t.first_letter = ?');
       params.push(letter.toLowerCase());
     }
     
     // 검색 필터
-    if (search) {
+    if (search && search.trim()) {
       conditions.push('t.name LIKE ?');
-      params.push(`%${search}%`);
+      params.push(`%${search.trim()}%`);
     }
     
     if (conditions.length > 0) {
@@ -51,31 +55,45 @@ router.get('/', async (req, res) => {
     }
     
     query += ' GROUP BY t.id, t.name, t.first_letter, t.usage_count';
-    query += ' ORDER BY t.name';
+    query += ' ORDER BY t.name ASC';
+    
+    console.log('[태그 목록] 실행할 쿼리:', query);
+    console.log('[태그 목록] 파라미터:', params);
     
     const [tags] = await pool.execute(query, params);
     
     console.log(`[태그 목록] ${tags.length}개 태그 조회됨`);
     
-    // 알파벳별로 그룹화
-    const tagsByLetter = {};
-    tags.forEach(tag => {
-      const letter = tag.first_letter;
-      if (!tagsByLetter[letter]) {
-        tagsByLetter[letter] = [];
-      }
-      tagsByLetter[letter].push(tag);
-    });
+    // 안전한 응답 구조
+    const response = {
+      success: true,
+      tags: tags || [],
+      total: tags ? tags.length : 0
+    };
     
-    res.json({
-      tags,
-      tagsByLetter
-    });
+    // 알파벳별로 그룹화 (letter가 'all'이거나 없을 때만)
+    if (!letter || letter === 'all') {
+      const tagsByLetter = {};
+      if (tags && tags.length > 0) {
+        tags.forEach(tag => {
+          const letterKey = tag.first_letter || '#';
+          if (!tagsByLetter[letterKey]) {
+            tagsByLetter[letterKey] = [];
+          }
+          tagsByLetter[letterKey].push(tag);
+        });
+      }
+      response.tagsByLetter = tagsByLetter;
+    }
+    
+    res.json(response);
   } catch (error) {
     console.error('태그 조회 오류:', error);
     res.status(500).json({ 
+      success: false,
       error: '태그 조회 중 오류가 발생했습니다.',
-      details: error.message 
+      details: error.message,
+      tags: []
     });
   }
 });
@@ -224,7 +242,10 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     const { name } = req.body;
     
     if (!name || !name.trim()) {
-      return res.status(400).json({ error: '태그명은 필수입니다.' });
+      return res.status(400).json({ 
+        success: false,
+        error: '태그명은 필수입니다.' 
+      });
     }
     
     const trimmedName = name.trim();
@@ -239,7 +260,10 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     );
     
     if (existing.length > 0) {
-      return res.status(400).json({ error: '이미 존재하는 태그입니다.' });
+      return res.status(400).json({ 
+        success: false,
+        error: '이미 존재하는 태그입니다.' 
+      });
     }
     
     const [result] = await pool.execute(
@@ -256,6 +280,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     console.log(`[태그 생성] 완료: ${trimmedName} (${firstLetter}) (ID: ${result.insertId})`);
     
     res.status(201).json({
+      success: true,
       message: '태그가 생성되었습니다.',
       tag: newTag[0]
     });
@@ -263,6 +288,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('태그 생성 오류:', error);
     res.status(500).json({ 
+      success: false,
       error: '태그 생성 중 오류가 발생했습니다.',
       details: error.message 
     });
