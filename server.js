@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 5159;
 
 // CORS 설정
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  origin: ['http://localhost:3000', 'http://localhost:3001'],
   credentials: true
 }));
 
@@ -16,123 +16,158 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// 기본 라우트
+// 요청 로깅 미들웨어
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
+
+// 정적 파일 서빙 (uploads 디렉토리)
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// 라우트 import
+const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
+const audioRoutes = require('./routes/audio');
+const contentsRoutes = require('./routes/contents');
+const tagsRoutes = require('./routes/tags');
+const commentsRoutes = require('./routes/comments'); // 새로 추가
+const debugRoutes = require('./routes/debug');
+
+// API 라우트 등록
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/audio', audioRoutes);
+app.use('/api/contents', contentsRoutes);
+app.use('/api/tags', tagsRoutes);
+app.use('/api/comments', commentsRoutes); // 댓글 라우트 추가
+app.use('/api/debug', debugRoutes);
+
+// 서버 상태 확인 라우트
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    database: process.env.DB_NAME || 'asmr_db'
+  });
+});
+
+// 루트 경로
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'ASMR 스트리밍 서버가 실행 중입니다.',
-    endpoints: {
-      contents: '/api/contents',
-      audio: '/api/audio',
-      auth: '/api/auth',
-      admin: '/api/admin',
-      tags: '/api/tags'
-    },
-    version: '1.0.0'
+    message: 'ASMR API Server',
+    version: '1.0.0',
+    endpoints: [
+      'GET /api/health - 서버 상태 확인',
+      'GET /api/debug/db-test - DB 연결 테스트',
+      'GET /api/debug/db-structure - DB 구조 확인',
+      'POST /api/auth/register - 회원가입',
+      'POST /api/auth/login - 로그인',
+      'GET /api/contents - 컨텐츠 목록',
+      'GET /api/contents/detail/:id - 컨텐츠 상세',
+      'GET /api/tags - 태그 목록',
+      'GET /api/comments/content/:id - 댓글 목록',
+      'POST /api/comments - 댓글 작성',
+      'GET /api/admin/stats - 관리자 통계'
+    ]
   });
 });
 
-// 헬스 체크
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
-});
-
-// 라우터들을 안전하게 로드
-try {
-  const contentsRouter = require('./routes/contents');
-  const audioRouter = require('./routes/audio');
-  const authRouter = require('./routes/auth');
-  const adminRouter = require('./routes/admin');
-  const tagsRouter = require('./routes/tags');
-
-  // 라우터 연결
-  app.use('/api/contents', contentsRouter);
-  app.use('/api/audio', audioRouter);
-  app.use('/api/auth', authRouter);
-  app.use('/api/admin', adminRouter);
-  app.use('/api/tags', tagsRouter);
-  
-  console.log('✅ 모든 라우터가 성공적으로 로드되었습니다.');
-} catch (error) {
-  console.error('❌ 라우터 로드 중 오류 발생:', error.message);
-  process.exit(1);
-}
-
-// 404 에러 처리
-app.use('*', (req, res) => {
-  res.status(404).json({ 
-    error: '요청한 엔드포인트를 찾을 수 없습니다.',
-    path: req.originalUrl,
-    method: req.method
-  });
-});
-
-// 전역 에러 처리 미들웨어
+// 글로벌 오류 처리 미들웨어
 app.use((error, req, res, next) => {
-  console.error('서버 에러:', error);
+  console.error('=== 서버 오류 발생 ===');
+  console.error('시간:', new Date().toISOString());
+  console.error('경로:', req.method, req.path);
+  console.error('오류:', error.message);
+  console.error('스택:', error.stack);
+  console.error('========================');
   
-  // Multer 에러 처리
-  if (error.code === 'LIMIT_FILE_SIZE') {
-    return res.status(400).json({ error: '파일 크기가 너무 큽니다. (최대 500MB)' });
+  // 데이터베이스 관련 오류 체크
+  if (error.code === 'ER_NO_SUCH_TABLE') {
+    return res.status(500).json({ 
+      error: '데이터베이스 테이블이 존재하지 않습니다.',
+      table: error.sqlMessage,
+      solution: '데이터베이스 스키마를 생성해주세요.'
+    });
   }
   
-  if (error.code === 'LIMIT_FILE_COUNT') {
-    return res.status(400).json({ error: '파일 개수가 너무 많습니다. (최대 20개)' });
+  if (error.code === 'ECONNREFUSED') {
+    return res.status(500).json({ 
+      error: '데이터베이스 연결 실패',
+      solution: 'MySQL 서버가 실행 중인지 확인하고 .env 설정을 확인해주세요.'
+    });
   }
   
-  if (error.message === '지원하지 않는 파일 형식입니다.') {
-    return res.status(400).json({ error: error.message });
+  if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+    return res.status(500).json({ 
+      error: '데이터베이스 접근 권한 오류',
+      solution: 'MySQL 사용자 권한을 확인해주세요.'
+    });
   }
   
-  // JWT 에러 처리
-  if (error.name === 'JsonWebTokenError') {
-    return res.status(401).json({ error: '유효하지 않은 토큰입니다.' });
+  if (error.code === 'ER_BAD_DB_ERROR') {
+    return res.status(500).json({ 
+      error: '데이터베이스가 존재하지 않습니다.',
+      solution: 'asmr_db 데이터베이스를 생성해주세요.'
+    });
   }
   
-  if (error.name === 'TokenExpiredError') {
-    return res.status(401).json({ error: '만료된 토큰입니다.' });
-  }
-  
-  // 기본 에러 처리
   res.status(500).json({ 
-    error: '서버 내부 오류가 발생했습니다.',
-    message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    error: '서버 내부 오류',
+    message: error.message,
+    ...(process.env.NODE_ENV === 'development' && { 
+      stack: error.stack,
+      path: req.path,
+      method: req.method
+    })
+  });
+});
+
+// 404 처리
+app.use((req, res) => {
+  console.log(`[404] ${req.method} ${req.path} - 경로를 찾을 수 없음`);
+  res.status(404).json({ 
+    error: '요청한 경로를 찾을 수 없습니다.',
+    path: req.path,
+    availableEndpoints: [
+      '/api/health',
+      '/api/debug/db-test',
+      '/api/debug/db-structure',
+      '/api/auth/*',
+      '/api/contents/*',
+      '/api/tags/*',
+      '/api/comments/*',
+      '/api/admin/*',
+      '/api/audio/*'
+    ]
   });
 });
 
 // 서버 시작
 app.listen(PORT, () => {
-  console.log(`🚀 서버가 http://localhost:${PORT}에서 실행 중입니다.`);
-  console.log(`📁 오디오 파일 경로: ${path.join(__dirname, 'audio-files')}`);
-  console.log(`📤 업로드 임시 경로: ${path.join(__dirname, 'uploads/temp')}`);
-  console.log(`🔑 JWT Secret 설정: ${process.env.JWT_SECRET ? '✅' : '❌'}`);
-  console.log(`💾 데이터베이스 설정: ${process.env.DB_NAME ? '✅' : '❌'}`);
-  
-  // 필요한 디렉토리 생성
-  const fs = require('fs');
-  const audioDir = path.join(__dirname, 'audio-files');
-  const uploadDir = path.join(__dirname, 'uploads', 'temp');
-  
-  [audioDir, uploadDir].forEach(dir => {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-      console.log(`📁 디렉토리 생성: ${dir}`);
-    }
-  });
+  console.log(`=== ASMR API 서버 시작 ===`);
+  console.log(`포트: ${PORT}`);
+  console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`시간: ${new Date().toISOString()}`);
+  console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
+  console.log(`테스트 URL: http://localhost:${PORT}/api/health`);
+  console.log(`디버그 URL: http://localhost:${PORT}/api/debug/db-test`);
+  console.log('========================');
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('🛑 SIGTERM 신호를 받았습니다. 서버를 종료합니다...');
-  process.exit(0);
-});
-
+// 프로세스 종료 처리
 process.on('SIGINT', () => {
-  console.log('🛑 SIGINT 신호를 받았습니다. 서버를 종료합니다...');
+  console.log('\n서버 종료 중...');
   process.exit(0);
 });
 
-module.exports = app;
+process.on('uncaughtException', (error) => {
+  console.error('처리되지 않은 예외:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('처리되지 않은 Promise 거부:', reason);
+  process.exit(1);
+});
