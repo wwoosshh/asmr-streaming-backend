@@ -22,11 +22,10 @@ router.get('/', async (req, res) => {
 });
 
 // 특정 컨텐츠 상세 조회
-router.get('/:id', async (req, res) => {
+router.get('/detail/:id', async (req, res) => {
   try {
     const contentId = req.params.id;
     
-    // 파라미터 검증
     if (!contentId || isNaN(contentId)) {
       return res.status(400).json({ error: '유효하지 않은 컨텐츠 ID입니다.' });
     }
@@ -62,7 +61,6 @@ router.get('/search/:query', async (req, res) => {
   try {
     const searchQuery = req.params.query;
     
-    // 파라미터 검증
     if (!searchQuery || searchQuery.trim().length === 0) {
       return res.status(400).json({ error: '검색어를 입력해주세요.' });
     }
@@ -84,6 +82,18 @@ router.get('/search/:query', async (req, res) => {
     console.error('컨텐츠 검색 오류:', error);
     res.status(500).json({ error: '서버 오류가 발생했습니다.' });
   }
+});
+
+// 레거시 지원: 기존 /:id 패턴을 /detail/:id로 리다이렉트
+router.get('/:id', (req, res) => {
+  const contentId = req.params.id;
+  
+  // 숫자가 아닌 경우 (예: search) 404 처리
+  if (isNaN(contentId)) {
+    return res.status(404).json({ error: '잘못된 요청입니다.' });
+  }
+  
+  res.redirect(`/api/contents/detail/${contentId}`);
 });
 
 module.exports = router;
