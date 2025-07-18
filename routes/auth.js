@@ -184,16 +184,24 @@ router.get('/me', authenticateToken, async (req, res) => {
   }
 });
 
-// 관리자 전용: 모든 사용자 조회
+// 관리자 전용: 모든 사용자 조회 (수정됨)
 router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    console.log(`[사용자 목록 조회] 요청자: ${req.user.username} (${req.user.role})`);
+    
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 20));
     const offset = (page - 1) * limit;
     
+    console.log(`[사용자 목록 조회] page: ${page}, limit: ${limit}, offset: ${offset}`);
+    
+    // 전체 사용자 수 조회
     const [countResult] = await pool.execute('SELECT COUNT(*) as total FROM users');
     const total = countResult[0].total;
     
+    console.log(`[사용자 목록 조회] 전체 사용자 수: ${total}`);
+    
+    // 사용자 목록 조회
     const [users] = await pool.execute(
       `SELECT id, username, email, role, created_at 
        FROM users 
@@ -202,7 +210,9 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
       [limit, offset]
     );
     
-    res.json({
+    console.log(`[사용자 목록 조회] 조회된 사용자 수: ${users.length}`);
+    
+    const response = {
       users,
       pagination: {
         page,
@@ -210,14 +220,19 @@ router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
         total,
         totalPages: Math.ceil(total / limit)
       }
-    });
+    };
+    
+    res.json(response);
   } catch (error) {
     console.error('사용자 목록 조회 오류:', error);
-    res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+    res.status(500).json({ 
+      error: '사용자 목록을 조회하는 중 오류가 발생했습니다.',
+      details: error.message 
+    });
   }
 });
 
-// 관리자 전용: 사용자 권한 변경 (안전한 패턴으로 수정)
+// 관리자 전용: 사용자 권한 변경
 router.patch('/user-role', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { userId, role } = req.body;
@@ -234,10 +249,14 @@ router.patch('/user-role', authenticateToken, requireAdmin, async (req, res) => 
       return res.status(400).json({ error: '자신의 권한은 변경할 수 없습니다.' });
     }
     
-    await pool.execute(
+    const [result] = await pool.execute(
       'UPDATE users SET role = ? WHERE id = ?',
       [role, userId]
     );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+    }
     
     console.log(`[권한 변경] 사용자 ID ${userId}의 권한을 ${role}로 변경`);
     
@@ -297,8 +316,64 @@ router.patch('/change-password', authenticateToken, async (req, res) => {
   }
 });
 
-module.exports = router;
+// 임시 관리자 계정 생성 (개발용)
+router.post('/create-admin', async (req, res) => {
+  try {
+    const { secretKey, username, email, password } = req.body;
+    
+    if (secretKey !== 'create_admin_2024') {
+      return res.status(403).json({ error: '권한이 없습니다.' });
+    }
+    
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: '모든 필드를 입력해주세요.' });
+    }
+    
+    if (!validateEmail(email)) {
+      return res.status(400).json({ error: '유효하지 않은 이메일 형식입니다.' });
+    }
+    
+    if (!validatePassword(password)) {
+      return res.status(400).json({ error: '비밀번호는 6자 이상이어야 합니다.' });
+    }
+    
+    if (username.length < 2 || username.length > 20) {
+      return res.status(400).json({ error: '사용자명은 2-20자 사이여야 합니다.' });
+    }
+    
+    const [existing] = await pool.execute(
+      'SELECT id FROM users WHERE email = ? OR username = ?',
+      [email, username]
+    );
+    
+    if (existing.length > 0) {
+      return res.status(400).json({ error: '이미 존재하는 이메일 또는 사용자명입니다.' });
+    }
+    
+    const saltRounds = 12;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+    
+    const [result] = await pool.execute(
+      'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
+      [username, email, passwordHash, 'admin']
+    );
+    
+    console.log(`[관리자 계정 생성] 새 관리자 생성: ${username} (${email})`);
+    
+    res.status(201).json({ 
+      message: '관리자 계정이 생성되었습니다.',
+      userId: result.insertId,
+      username: username,
+      email: email,
+      role: 'admin'
+    });
+    
+  } catch (error) {
+    console.error('관리자 계정 생성 오류:', error);
+    res.status(500).json({ error: '서버 오류가 발생했습니다.' });
+  }
+});
 
-// 미들웨어들을 별도로 export
+module.exports = router;
 module.exports.authenticateToken = authenticateToken;
 module.exports.requireAdmin = requireAdmin;

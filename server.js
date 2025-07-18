@@ -24,7 +24,8 @@ app.get('/', (req, res) => {
       contents: '/api/contents',
       audio: '/api/audio',
       auth: '/api/auth',
-      admin: '/api/admin'
+      admin: '/api/admin',
+      tags: '/api/tags'
     },
     version: '1.0.0'
   });
@@ -45,12 +46,14 @@ try {
   const audioRouter = require('./routes/audio');
   const authRouter = require('./routes/auth');
   const adminRouter = require('./routes/admin');
+  const tagsRouter = require('./routes/tags');
 
   // 라우터 연결
   app.use('/api/contents', contentsRouter);
   app.use('/api/audio', audioRouter);
   app.use('/api/auth', authRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/tags', tagsRouter);
   
   console.log('✅ 모든 라우터가 성공적으로 로드되었습니다.');
 } catch (error) {

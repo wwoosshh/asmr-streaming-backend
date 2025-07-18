@@ -139,7 +139,9 @@ function serveAudioFile(req, res, filePath) {
   }
 }
 
-// 컨텐츠의 모든 이미지 목록 조회
+// 라우트 정의 (구체적인 것부터 일반적인 것 순서로)
+
+// 이미지 관련 라우트들
 router.get('/images/:contentId', (req, res) => {
   const contentId = req.params.contentId;
   
@@ -219,7 +221,6 @@ router.get('/images/:contentId', (req, res) => {
   }
 });
 
-// 특정 번호의 이미지 파일 제공
 router.get('/image-part/:contentId/:imageNumber', (req, res) => {
   const { contentId, imageNumber } = req.params;
   
@@ -259,7 +260,6 @@ router.get('/image-part/:contentId/:imageNumber', (req, res) => {
   res.sendFile(path.resolve(imagePath));
 });
 
-// 메인 이미지 파일 제공
 router.get('/image-main/:contentId', (req, res) => {
   const contentId = req.params.contentId;
   
@@ -298,13 +298,81 @@ router.get('/image-main/:contentId', (req, res) => {
   res.sendFile(path.resolve(imagePath));
 });
 
-// 레거시 지원: 기존 image 라우트 (메인 이미지로 리다이렉트)
-router.get('/image/:contentId', (req, res) => {
+// 오디오 관련 라우트들
+router.get('/audio-full/:contentId', (req, res) => {
   const contentId = req.params.contentId;
-  res.redirect(`/api/audio/image-main/${contentId}`);
+  
+  console.log(`[전체 오디오 요청] contentId: ${contentId}`);
+  
+  if (!contentId) {
+    return res.status(400).json({ error: '잘못된 요청 파라미터입니다.' });
+  }
+  
+  const dirPath = findContentDirectory(contentId);
+  if (!dirPath) {
+    return res.status(404).json({ 
+      error: '컨텐츠 디렉토리를 찾을 수 없습니다.',
+      contentId: contentId
+    });
+  }
+  
+  const filePath = findFileInDirectory(dirPath, contentId, 'full', ['.m4a', '.mp3', '.wav', '.aac']);
+  if (!filePath) {
+    try {
+      const files = fs.readdirSync(dirPath);
+      console.log(`[디렉토리 파일 목록] ${files.join(', ')}`);
+    } catch (error) {
+      console.log(`[디렉토리 읽기 오류] ${error.message}`);
+    }
+    
+    return res.status(404).json({ 
+      error: '전체 음성 파일을 찾을 수 없습니다.',
+      contentId: contentId,
+      directory: dirPath
+    });
+  }
+  
+  serveAudioFile(req, res, filePath);
 });
 
-// 디버그용 파일 목록 조회
+router.get('/audio-part/:contentId/:partNumber', (req, res) => {
+  const { contentId, partNumber } = req.params;
+  
+  console.log(`[파트 오디오 요청] contentId: ${contentId}, partNumber: ${partNumber}`);
+  
+  if (!contentId || !partNumber) {
+    return res.status(400).json({ error: '잘못된 요청 파라미터입니다.' });
+  }
+  
+  const dirPath = findContentDirectory(contentId);
+  if (!dirPath) {
+    return res.status(404).json({ 
+      error: '컨텐츠 디렉토리를 찾을 수 없습니다.',
+      contentId: contentId
+    });
+  }
+  
+  const filePath = findFileInDirectory(dirPath, contentId, partNumber, ['.m4a', '.mp3', '.wav', '.aac']);
+  if (!filePath) {
+    try {
+      const files = fs.readdirSync(dirPath);
+      console.log(`[디렉토리 파일 목록] ${files.join(', ')}`);
+    } catch (error) {
+      console.log(`[디렉토리 읽기 오류] ${error.message}`);
+    }
+    
+    return res.status(404).json({ 
+      error: '음성 파일을 찾을 수 없습니다.',
+      contentId: contentId,
+      partNumber: partNumber,
+      directory: dirPath
+    });
+  }
+  
+  serveAudioFile(req, res, filePath);
+});
+
+// 디버그 라우트
 router.get('/debug/:contentId', (req, res) => {
   const contentId = req.params.contentId;
   
@@ -346,93 +414,10 @@ router.get('/debug/:contentId', (req, res) => {
   }
 });
 
-// 오디오 파일 스트리밍 (전체 파일)
-router.get('/audio-full/:contentId', (req, res) => {
+// 레거시 리다이렉트 라우트 (메인 이미지)
+router.get('/image/:contentId', (req, res) => {
   const contentId = req.params.contentId;
-  
-  console.log(`[전체 오디오 요청] contentId: ${contentId}`);
-  
-  if (!contentId) {
-    return res.status(400).json({ error: '잘못된 요청 파라미터입니다.' });
-  }
-  
-  const dirPath = findContentDirectory(contentId);
-  if (!dirPath) {
-    return res.status(404).json({ 
-      error: '컨텐츠 디렉토리를 찾을 수 없습니다.',
-      contentId: contentId
-    });
-  }
-  
-  const filePath = findFileInDirectory(dirPath, contentId, 'full', ['.m4a', '.mp3', '.wav', '.aac']);
-  if (!filePath) {
-    try {
-      const files = fs.readdirSync(dirPath);
-      console.log(`[디렉토리 파일 목록] ${files.join(', ')}`);
-    } catch (error) {
-      console.log(`[디렉토리 읽기 오류] ${error.message}`);
-    }
-    
-    return res.status(404).json({ 
-      error: '전체 음성 파일을 찾을 수 없습니다.',
-      contentId: contentId,
-      directory: dirPath
-    });
-  }
-  
-  serveAudioFile(req, res, filePath);
-});
-
-// 오디오 파일 스트리밍 (파트별)
-router.get('/audio-part/:contentId/:partNumber', (req, res) => {
-  const { contentId, partNumber } = req.params;
-  
-  console.log(`[파트 오디오 요청] contentId: ${contentId}, partNumber: ${partNumber}`);
-  
-  if (!contentId || !partNumber) {
-    return res.status(400).json({ error: '잘못된 요청 파라미터입니다.' });
-  }
-  
-  const dirPath = findContentDirectory(contentId);
-  if (!dirPath) {
-    return res.status(404).json({ 
-      error: '컨텐츠 디렉토리를 찾을 수 없습니다.',
-      contentId: contentId
-    });
-  }
-  
-  const filePath = findFileInDirectory(dirPath, contentId, partNumber, ['.m4a', '.mp3', '.wav', '.aac']);
-  if (!filePath) {
-    try {
-      const files = fs.readdirSync(dirPath);
-      console.log(`[디렉토리 파일 목록] ${files.join(', ')}`);
-    } catch (error) {
-      console.log(`[디렉토리 읽기 오류] ${error.message}`);
-    }
-    
-    return res.status(404).json({ 
-      error: '음성 파일을 찾을 수 없습니다.',
-      contentId: contentId,
-      partNumber: partNumber,
-      directory: dirPath
-    });
-  }
-  
-  serveAudioFile(req, res, filePath);
-});
-
-// 레거시 지원: 기존 복잡한 라우트 패턴을 안전한 방식으로 처리
-router.get('/:contentId/:fileNumber', (req, res) => {
-  const { contentId, fileNumber } = req.params;
-  
-  // full 또는 숫자인 경우에만 처리
-  if (fileNumber === 'full') {
-    res.redirect(`/api/audio/audio-full/${contentId}`);
-  } else if (/^\d+$/.test(fileNumber)) {
-    res.redirect(`/api/audio/audio-part/${contentId}/${fileNumber}`);
-  } else {
-    res.status(400).json({ error: '잘못된 파일 번호입니다.' });
-  }
+  res.redirect(`/api/audio/image-main/${contentId}`);
 });
 
 module.exports = router;
