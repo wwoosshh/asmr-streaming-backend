@@ -1,23 +1,37 @@
 const express = require('express');
 const cors = require('cors');
-const https = require('https');  // 추가
-const fs = require('fs');        // 추가
+const https = require('https');
+const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5159;
 
-// CORS 설정 (Netlify 도메인 추가)
-app.use(cors({
-  origin: [
-    'http://localhost:3000', 
-    'http://localhost:3001',
-    'https://localhost:3000',           // 추가
-    'https://silly-axolotl-00378a.netlify.app/'  // 추가
-  ],
-  credentials: true
-}));
+// 모든 preflight OPTIONS 요청을 먼저 처리
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Range');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Max-Age', '86400');
+  res.sendStatus(200);
+});
+
+// 모든 응답에 CORS 헤더 추가
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Range');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // 보안 헤더들
+  res.header('X-Content-Type-Options', 'nosniff');
+  res.header('X-Frame-Options', 'DENY');
+  res.header('X-XSS-Protection', '1; mode=block');
+  
+  next();
+});
 
 // JSON 파싱 미들웨어
 app.use(express.json({ limit: '50mb' }));
@@ -26,6 +40,9 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // 요청 로깅 미들웨어
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  if (req.method === 'OPTIONS') {
+    console.log('  ↳ CORS Preflight 요청');
+  }
   next();
 });
 
@@ -57,15 +74,17 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
     database: process.env.DB_NAME || 'asmr_db',
-    protocol: 'HTTPS'  // 추가
+    protocol: 'HTTPS',
+    cors: 'enabled'
   });
 });
 
 // 루트 경로
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'ASMR API Server (HTTPS)',  // 수정
+    message: 'ASMR API Server (HTTPS)',
     version: '1.0.0',
+    cors: 'All origins allowed',
     endpoints: [
       'GET /api/health - 서버 상태 확인',
       'GET /api/debug/db-test - DB 연결 테스트',
@@ -90,6 +109,11 @@ app.use((error, req, res, next) => {
   console.error('오류:', error.message);
   console.error('스택:', error.stack);
   console.error('========================');
+  
+  // CORS 헤더 추가 (오류 응답에도)
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Range');
   
   // 데이터베이스 관련 오류 체크
   if (error.code === 'ER_NO_SUCH_TABLE') {
@@ -135,6 +159,12 @@ app.use((error, req, res, next) => {
 // 404 처리
 app.use((req, res) => {
   console.log(`[404] ${req.method} ${req.path} - 경로를 찾을 수 없음`);
+  
+  // CORS 헤더 추가 (404 응답에도)
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Range');
+  
   res.status(404).json({ 
     error: '요청한 경로를 찾을 수 없습니다.',
     path: req.path,
@@ -152,7 +182,7 @@ app.use((req, res) => {
   });
 });
 
-// HTTPS 서버 시작 (수정된 부분)
+// HTTPS 서버 시작
 try {
   const privateKey = fs.readFileSync(path.join(__dirname, 'ssl', 'private-key.pem'), 'utf8');
   const certificate = fs.readFileSync(path.join(__dirname, 'ssl', 'certificate.pem'), 'utf8');
@@ -160,30 +190,27 @@ try {
   const credentials = { 
     key: privateKey, 
     cert: certificate,
-    // SSL 옵션 추가
     requestCert: false,
     rejectUnauthorized: false
   };
   
-  // 🔥 중요: '0.0.0.0'로 바인딩하여 모든 네트워크 인터페이스에서 접근 가능하게 설정
   https.createServer(credentials, app).listen(PORT, '0.0.0.0', () => {
     console.log(`=== ASMR API 서버 시작 (HTTPS) ===`);
     console.log(`포트: ${PORT}`);
-    console.log(`바인딩: 0.0.0.0 (모든 인터페이스)`);  // 추가
+    console.log(`바인딩: 0.0.0.0 (모든 인터페이스)`);
+    console.log(`CORS: 모든 도메인 허용`);
     console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
     console.log(`시간: ${new Date().toISOString()}`);
     console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
     console.log(`로컬 테스트: https://localhost:${PORT}/api/health`);
-    console.log(`내부 IP 테스트: https://127.0.0.1:${PORT}/api/health`);  // 추가
     console.log(`외부 접근: https://58.233.102.165:${PORT}/api/health`);
     console.log('========================');
     
-    // 🧪 서버 시작 후 자체 연결 테스트
+    // 서버 시작 후 자체 연결 테스트
     setTimeout(() => {
       console.log('\n🧪 서버 자체 연결 테스트 시작...');
       
-      // localhost 테스트
-      const testReq1 = https.request({
+      const testReq = https.request({
         hostname: 'localhost',
         port: PORT,
         path: '/api/health',
@@ -192,26 +219,10 @@ try {
       }, (res) => {
         console.log('✅ localhost 테스트 성공:', res.statusCode);
       });
-      testReq1.on('error', (err) => {
+      testReq.on('error', (err) => {
         console.error('❌ localhost 테스트 실패:', err.message);
       });
-      testReq1.end();
-      
-      // 127.0.0.1 테스트
-      const testReq2 = https.request({
-        hostname: '127.0.0.1',
-        port: PORT,
-        path: '/api/health',
-        method: 'GET',
-        rejectUnauthorized: false
-      }, (res) => {
-        console.log('✅ 127.0.0.1 테스트 성공:', res.statusCode);
-      });
-      testReq2.on('error', (err) => {
-        console.error('❌ 127.0.0.1 테스트 실패:', err.message);
-      });
-      testReq2.end();
-      
+      testReq.end();
     }, 2000);
   });
   
@@ -219,11 +230,11 @@ try {
   console.error('SSL 인증서 로드 실패:', error.message);
   console.log('HTTP 모드로 실행합니다...');
   
-  // HTTP 폴백도 0.0.0.0에 바인딩
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`=== ASMR API 서버 시작 (HTTP) ===`);
     console.log(`포트: ${PORT}`);
     console.log(`바인딩: 0.0.0.0 (모든 인터페이스)`);
+    console.log(`CORS: 모든 도메인 허용`);
     console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
     console.log(`시간: ${new Date().toISOString()}`);
     console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
