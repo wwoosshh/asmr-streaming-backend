@@ -14,7 +14,7 @@ app.use(cors({
     'http://localhost:3000', 
     'http://localhost:3001',
     'https://localhost:3000',           // 추가
-    'https://silly-axolotl-003f8a.netlify.app'  // 추가
+    'https://silly-axolotl-00378a.netlify.app/'  // 추가
   ],
   credentials: true
 }));
@@ -157,26 +157,73 @@ try {
   const privateKey = fs.readFileSync(path.join(__dirname, 'ssl', 'private-key.pem'), 'utf8');
   const certificate = fs.readFileSync(path.join(__dirname, 'ssl', 'certificate.pem'), 'utf8');
   
-  const credentials = { key: privateKey, cert: certificate };
+  const credentials = { 
+    key: privateKey, 
+    cert: certificate,
+    // SSL 옵션 추가
+    requestCert: false,
+    rejectUnauthorized: false
+  };
   
+  // 🔥 중요: '0.0.0.0'로 바인딩하여 모든 네트워크 인터페이스에서 접근 가능하게 설정
   https.createServer(credentials, app).listen(PORT, '0.0.0.0', () => {
     console.log(`=== ASMR API 서버 시작 (HTTPS) ===`);
     console.log(`포트: ${PORT}`);
+    console.log(`바인딩: 0.0.0.0 (모든 인터페이스)`);  // 추가
     console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
     console.log(`시간: ${new Date().toISOString()}`);
     console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
     console.log(`로컬 테스트: https://localhost:${PORT}/api/health`);
+    console.log(`내부 IP 테스트: https://127.0.0.1:${PORT}/api/health`);  // 추가
     console.log(`외부 접근: https://58.233.102.165:${PORT}/api/health`);
     console.log('========================');
+    
+    // 🧪 서버 시작 후 자체 연결 테스트
+    setTimeout(() => {
+      console.log('\n🧪 서버 자체 연결 테스트 시작...');
+      
+      // localhost 테스트
+      const testReq1 = https.request({
+        hostname: 'localhost',
+        port: PORT,
+        path: '/api/health',
+        method: 'GET',
+        rejectUnauthorized: false
+      }, (res) => {
+        console.log('✅ localhost 테스트 성공:', res.statusCode);
+      });
+      testReq1.on('error', (err) => {
+        console.error('❌ localhost 테스트 실패:', err.message);
+      });
+      testReq1.end();
+      
+      // 127.0.0.1 테스트
+      const testReq2 = https.request({
+        hostname: '127.0.0.1',
+        port: PORT,
+        path: '/api/health',
+        method: 'GET',
+        rejectUnauthorized: false
+      }, (res) => {
+        console.log('✅ 127.0.0.1 테스트 성공:', res.statusCode);
+      });
+      testReq2.on('error', (err) => {
+        console.error('❌ 127.0.0.1 테스트 실패:', err.message);
+      });
+      testReq2.end();
+      
+    }, 2000);
   });
   
 } catch (error) {
   console.error('SSL 인증서 로드 실패:', error.message);
   console.log('HTTP 모드로 실행합니다...');
   
+  // HTTP 폴백도 0.0.0.0에 바인딩
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`=== ASMR API 서버 시작 (HTTP) ===`);
     console.log(`포트: ${PORT}`);
+    console.log(`바인딩: 0.0.0.0 (모든 인터페이스)`);
     console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
     console.log(`시간: ${new Date().toISOString()}`);
     console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);

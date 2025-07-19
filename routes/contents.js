@@ -6,11 +6,11 @@ const pool = require('../config/database');
 const getContentTags = async (contentId) => {
   try {
     const [tags] = await pool.execute(`
-      SELECT t.id, t.name, t.category 
+      SELECT t.id, t.name, t.first_letter, t.usage_count
       FROM tags t 
       JOIN content_tags ct ON t.id = ct.tag_id 
       WHERE ct.content_id = ?
-      ORDER BY t.category, t.sort_order, t.name
+      ORDER BY t.first_letter, t.name
     `, [contentId]);
     
     return tags;
