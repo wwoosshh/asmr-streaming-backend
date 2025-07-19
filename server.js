@@ -1,14 +1,21 @@
 const express = require('express');
 const cors = require('cors');
+const https = require('https');  // 추가
+const fs = require('fs');        // 추가
 const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5159;
 
-// CORS 설정
+// CORS 설정 (Netlify 도메인 추가)
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001'],
+  origin: [
+    'http://localhost:3000', 
+    'http://localhost:3001',
+    'https://localhost:3000',           // 추가
+    'https://silly-axolotl-003f8a.netlify.app'  // 추가
+  ],
   credentials: true
 }));
 
@@ -31,7 +38,7 @@ const adminRoutes = require('./routes/admin');
 const audioRoutes = require('./routes/audio');
 const contentsRoutes = require('./routes/contents');
 const tagsRoutes = require('./routes/tags');
-const commentsRoutes = require('./routes/comments'); // 새로 추가
+const commentsRoutes = require('./routes/comments');
 const debugRoutes = require('./routes/debug');
 
 // API 라우트 등록
@@ -40,7 +47,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api/contents', contentsRoutes);
 app.use('/api/tags', tagsRoutes);
-app.use('/api/comments', commentsRoutes); // 댓글 라우트 추가
+app.use('/api/comments', commentsRoutes);
 app.use('/api/debug', debugRoutes);
 
 // 서버 상태 확인 라우트
@@ -49,14 +56,15 @@ app.get('/api/health', (req, res) => {
     status: 'OK', 
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    database: process.env.DB_NAME || 'asmr_db'
+    database: process.env.DB_NAME || 'asmr_db',
+    protocol: 'HTTPS'  // 추가
   });
 });
 
 // 루트 경로
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'ASMR API Server',
+    message: 'ASMR API Server (HTTPS)',  // 수정
     version: '1.0.0',
     endpoints: [
       'GET /api/health - 서버 상태 확인',
@@ -144,17 +152,39 @@ app.use((req, res) => {
   });
 });
 
-// 서버 시작
-app.listen(PORT, () => {
-  console.log(`=== ASMR API 서버 시작 ===`);
-  console.log(`포트: ${PORT}`);
-  console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`시간: ${new Date().toISOString()}`);
-  console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
-  console.log(`테스트 URL: http://localhost:${PORT}/api/health`);
-  console.log(`디버그 URL: http://localhost:${PORT}/api/debug/db-test`);
-  console.log('========================');
-});
+// HTTPS 서버 시작 (수정된 부분)
+try {
+  const privateKey = fs.readFileSync(path.join(__dirname, 'ssl', 'private-key.pem'), 'utf8');
+  const certificate = fs.readFileSync(path.join(__dirname, 'ssl', 'certificate.pem'), 'utf8');
+  
+  const credentials = { key: privateKey, cert: certificate };
+  
+  https.createServer(credentials, app).listen(PORT, '0.0.0.0', () => {
+    console.log(`=== ASMR API 서버 시작 (HTTPS) ===`);
+    console.log(`포트: ${PORT}`);
+    console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`시간: ${new Date().toISOString()}`);
+    console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
+    console.log(`로컬 테스트: https://localhost:${PORT}/api/health`);
+    console.log(`외부 접근: https://58.233.102.165:${PORT}/api/health`);
+    console.log('========================');
+  });
+  
+} catch (error) {
+  console.error('SSL 인증서 로드 실패:', error.message);
+  console.log('HTTP 모드로 실행합니다...');
+  
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`=== ASMR API 서버 시작 (HTTP) ===`);
+    console.log(`포트: ${PORT}`);
+    console.log(`환경: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`시간: ${new Date().toISOString()}`);
+    console.log(`데이터베이스: ${process.env.DB_HOST}:3306/${process.env.DB_NAME}`);
+    console.log(`테스트 URL: http://localhost:${PORT}/api/health`);
+    console.log(`⚠️  HTTPS를 위해 SSL 인증서를 설정해주세요.`);
+    console.log('========================');
+  });
+}
 
 // 프로세스 종료 처리
 process.on('SIGINT', () => {
